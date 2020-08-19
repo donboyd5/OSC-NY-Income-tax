@@ -1,0 +1,279 @@
+---
+title: "Graphs and tables for OSC NY income tax project"
+author: "Don Boyd"
+date: "`r format(Sys.time(), '%B %d, %Y')`"
+output:
+  html_notebook:
+    df_print: paged
+    fig_height: 6
+    fig_width: 8
+    toc: yes
+editor_options:
+  chunk_output_type: inline
+---
+
+<!-- 
+  html_document:
+    fig_height: 6
+    fig_width: 8
+    toc: yes
+    toc_depth: 5
+editor_options:
+  chunk_output_type: console or inline    
+    
+-->
+
+
+```{r notes, include=FALSE}
+# It can be hard to get tables to work properly. It seems like it is best to have chunk output inline.
+
+```
+
+
+```{r libs, echo=FALSE, message=FALSE, warning=FALSE, include=FALSE}
+# source(here::here("includes", "libraries.r"))
+library(tidyverse)
+library(microweight)
+devtools::session_info()
+
+```
+
+
+```{r setup_and_globals, echo=FALSE, message=FALSE, warning=FALSE, include=FALSE}
+# fredr_set_key(globals$fred_apikey)
+knitr::opts_chunk$set(echo = FALSE)
+
+```
+
+
+# SOI Historical Table 2
+
+```{r getht2-ts, rows.print = 11}
+
+# 0 = No AGI Stub
+# 1 = ‘Under $1’
+# 2 = '$1 under $10,000'
+# 3 = '$10,000 under $25,000'
+# 4 = '$25,000 under $50,000'
+# 5 = '$50,000 under $75,000'
+# 6 = '$75,000 under $100,000'
+# 7 = '$100,000 under $200,000'
+# 8 = ‘$200,000 under $500,000’
+# 9 = ‘$500,000 under $1,000,000’
+# 10 = ‘$1,000,000 or more’
+
+# https://www.irs.gov/pub/irs-soi/17in54cmcsv.csv
+# https://www.irs.gov/pub/irs-soi/16in54cmcsv.csv
+# 
+ubase <- "https://www.irs.gov/pub/irs-soi/"
+for(y in 2012:2017){
+  if(y==2013) suffix <- "xlsx" else suffix <- "csv"
+  fn <- paste0(str_sub(y, 3, 4), "in54cmcsv.", suffix)
+  url <- paste0(ubase, fn)
+  download.file(url, here::here("data", "soi", fn), mode="wb")
+}
+
+# create a csv version of the 2013 file
+df <- read_excel(here::here("data", "soi", "13in54cmcsv.xlsx"))
+glimpse(df)
+names(df)
+# "State"    "agi_stub" "N1"
+df %>%
+  write_csv(here::here("data", "soi", "13in54cmcsv.csv"))
+
+# now get the time series
+f <- function(y) {
+  print(y)
+  fn <- paste0(str_sub(y, 3, 4), "in54cmcsv.csv")
+  df <- read_csv(here::here("data", "soi", fn), col_types=cols(.default = col_character()))
+  df %>%
+    setNames(str_to_lower(names(.))) %>%
+    mutate(year=y) %>%
+    rename(stabbr=state) %>%
+    select(year, everything())
+}
+tmp <- map_df(2012:2017, f)
+glimpse(tmp)
+count(tmp, agi_stub)
+
+# which variables should be character? only stabbr
+cvars <- c("stabbr")
+glimpse(tmp %>% filter(year==2016))
+
+ht2_all <- tmp %>%
+  mutate(across(-c(stabbr, year, agi_stub), parse_number),
+         agi_stub=as.integer(agi_stub))
+glimpse(ht2_all)
+saveRDS(ht2_all, here::here("data", "soi", "ht2.rds"))
+
+```
+
+
+## 2017
+```{r mshare, rows.print = 11}
+ht2_all <- readRDS(here::here("data", "soi", "ht2.rds"))
+
+mshare <- ht2_all %>%
+  filter(year==2017) %>%
+  select(stabbr, agi_stub, n1) %>%
+  filter(agi_stub %in% c(0, 8:10)) %>%
+  group_by(stabbr) %>%
+  mutate(pct=n1 / n1[agi_stub == 0],
+         group=paste0("grp", str_pad(agi_stub, width=2, side="left", pad="0"))) %>%
+  select(-n1, -agi_stub) %>%
+  pivot_wider(names_from = group, values_from = pct) %>%
+  ungroup %>%
+  mutate(higroup=grp08 + grp09 + grp10,
+         index10=grp10 / grp10[stabbr == "US"] * 100,
+         indexhi=higroup / higroup[stabbr == "US"] * 100)
+
+mshare %>%
+  arrange(-index10) %>%
+  datatable
+
+```
+
+
+```{r millionaires, rows.print=11}
+
+mdf <- ht2_all %>%
+  filter(year==2017) %>%
+  group_by(stabbr) %>%
+  mutate(mpct = n1 / n1[agi_stub == 0] * 100) %>%
+  ungroup %>%
+  filter(agi_stub==10) %>%
+  mutate(avgagi_m=a00100 / n1 / 1e3,
+         marpct=mars2 / n1 * 100,
+         avgkids=numdep / n1,
+         oldpct = elderly / n1 * 100,
+         wagepct = a00200 / a00100 * 100,
+         cgpct = a01000 / a00100 * 100,
+         businc = a00900,
+         partinc = a26270,
+         busincpct=businc / a00100 * 100,
+         partincpct=partinc / a00100 * 100,
+         retinc=a01400 + a01700 + a02500,
+         retincpct=retinc / a00100 * 100,
+         otherpct=100 - wagepct - cgpct - busincpct - partincpct - retincpct) %>%
+  select(stabbr, n1, mpct, avgagi_m, marpct, avgkids, oldpct, wagepct, cgpct, busincpct, partincpct, retincpct, otherpct)
+
+mdf %>%
+  filter(!stabbr %in% c("OA", "DC")) %>%
+  mutate(rank=rank(-mpct)) %>%
+  mutate(across(c(avgkids, contains("pct"), -mpct), function(x) round(x, 1))) %>%
+  mutate(across(avgagi_m, function(x) round(x, 2))) %>%
+  mutate(across(mpct, function(x) round(x, 2))) %>%
+  arrange(rank) %>%
+  filter(row_number() %in% 1:10 | stabbr=="US") %>%
+  select(stabbr, n1, mpct, rank, everything()) %>%
+  datatable(options = list(pageLength = 11))
+  
+
+
+```
+
+## Time series
+
+```{r ts}
+data(package="bdata")
+glimpse(soiall)
+count(soiall, year) # 2004-2013
+count(soiall, vname)
+count(soiall, incgrp)
+
+count(soiall, year, incgrp)
+
+
+
+
+ht2m_prior <- soiall %>%
+  filter(year %in% 2004:2012) %>%
+  filter(vname=="nret") %>%
+  mutate(agi_stub=case_when(incgrp == "$1m+" ~ 10,
+                            incgrp == "all" ~ 0,
+                            TRUE ~ NA_real_)) %>%
+  filter(agi_stub %in% c(0, 10)) %>%
+  select(year, stabbr, agi_stub, n1=value)
+
+ht2m_prior %>% filter(year==2012, stabbr=="US")
+ht2_all %>% filter(year==2012, stabbr=="US", agi_stub %in% c(0, 10)) %>% select(year, stabbr, agi_stub, n1)
+# year stabbr agi_stub n1
+# 2012	US	0	145025450	
+# 2012	US	10	392270
+# year stabbr agi_stub n1
+# 2012	US	0	145025450	
+# 2012	US	10	392270	
+  
+
+ht2_all
+glimpse(ht2_all)
+ht2_all %>%
+  bind_rows(ht2m_prior %>% filter(year %in% 2010:2011)) %>% # only 2 years with the $1m+ category
+  select(year, stabbr, agi_stub, n1) %>%
+  group_by(stabbr, year) %>%
+  mutate(n1_all=n1[agi_stub==0]) %>%
+  ungroup %>%
+  filter(agi_stub==10) %>%
+  mutate(mpct=n1 / n1_all * 100) %>%
+  filter(stabbr %in% c("CT", "NY", "MA", "NJ", "CA", "FL", "TX")) %>%
+  ggplot(aes(year, mpct, colour=stabbr)) +
+  geom_line() +
+  geom_point()
+
+ht2_all %>%
+  bind_rows(ht2m_prior %>% filter(year %in% 2010:2011)) %>% # only 2 years with the $1m+ category
+  select(year, stabbr, agi_stub, n1) %>%
+  group_by(stabbr, year) %>%
+  mutate(n1_all=n1[agi_stub==0]) %>%
+  ungroup %>%
+  filter(agi_stub==10) %>%
+  mutate(mpct=n1 / n1_all * 100) %>%
+  filter(stabbr %in% c("CT", "NY", "MA", "NJ", "CA", "FL", "TX")) %>%
+  ggplot(aes(year, n1, colour=stabbr)) +
+  geom_line() +
+  geom_point()
+
+
+# something happened in FL, TX in 2016, 2017
+ht2_all %>%
+  bind_rows(ht2m_prior %>% filter(year %in% 2010:2011)) %>% # only 2 years with the $1m+ category
+  select(year, stabbr, agi_stub, n1) %>%
+  group_by(stabbr, year) %>%
+  mutate(n1_all=n1[agi_stub==0]) %>%
+  ungroup %>%
+  filter(agi_stub==10) %>%
+  group_by(stabbr) %>%
+  mutate(im=n1 / n1[year==2010] * 100) %>%
+  filter(stabbr %in% c("CT", "NY", "MA", "NJ", "CA", "FL", "TX")) %>%
+  ggplot(aes(year, im, colour=stabbr)) +
+  geom_line() +
+  geom_point()
+
+# share of m's
+st <- "CA"
+
+sts <- c("CA", "CT", "FL", "IL", "MA", "NJ", "NY", "TX", "WA")
+ht2_all %>%
+  bind_rows(ht2m_prior %>% filter(year %in% 2010:2011)) %>% # only 2 years with the $1m+ category
+  filter(agi_stub %in% c(0, 10)) %>%
+  select(year, stabbr, agi_stub, n1) %>%
+  mutate(agi_stub=paste0("stub", str_pad(agi_stub, width=2, side="left", pad="0"))) %>%
+  pivot_wider(values_from = n1, names_from = agi_stub) %>%
+  mutate(stubres=stub00 - stub10) %>%
+  group_by(year) %>%
+  mutate(across(starts_with("stub"), function(x) x / x[stabbr=="US"] * 100)) %>%
+  filter(stabbr %in% sts) %>%
+  select(-stub00) %>%
+  pivot_longer(starts_with("stub")) %>%
+  group_by(name) %>%
+  mutate(ivalue=value / value[year==2010] * 100) %>%
+  ggplot(aes(year, ivalue, colour=name)) +
+  geom_line() +
+  geom_point() +
+  facet_wrap(~stabbr, ncol = 3, scales="free")
+  
+
+
+```
+
+
