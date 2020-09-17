@@ -1,0 +1,583 @@
+---
+title: "IRS SOI Historical Table 2 for 2018"
+author: "Don Boyd"
+date: "`r format(Sys.time(), '%B %d, %Y')`"
+output:
+  html_notebook:
+    df_print: paged
+    fig_height: 6
+    fig_width: 8
+    toc: yes
+  html_document:
+    toc: yes
+    df_print: paged
+editor_options:
+  chunk_output_type: inline
+---
+
+<!-- 
+  html_document:
+    fig_height: 6
+    fig_width: 8
+    toc: yes
+    toc_depth: 5
+editor_options:
+  chunk_output_type: console or inline    
+    
+-->
+
+
+
+```{r setup, echo=FALSE, message=FALSE, warning=FALSE, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+
+
+```{r notes, include=FALSE}
+# It can be hard to get tables to work properly. It seems like it is best to have chunk output inline.
+
+```
+
+
+```{r libs, echo=FALSE, message=FALSE, warning=FALSE, include=FALSE}
+# source(here::here("includes", "libraries.r"))
+library(tidyverse)
+library(readxl)
+library(btools)
+library(bdata)
+library(DT)
+library(microweight)
+library(knitr)
+devtools::session_info()
+
+```
+
+
+**Use the links above to navigate this document (Ctrl-home to return to the top to access the links).**
+
+# Observations
+
+
+# Descriptive statistics
+
+```{r prep_data, rows.print = 11, include=FALSE}
+# 0 = No AGI Stub
+# 1 = ‘Under $1’
+# 2 = '$1 under $10,000'
+# 3 = '$10,000 under $25,000'
+# 4 = '$25,000 under $50,000'
+# 5 = '$50,000 under $75,000'
+# 6 = '$75,000 under $100,000'
+# 7 = '$100,000 under $200,000'
+# 8 = ‘$200,000 under $500,000’
+# 9 = ‘$500,000 under $1,000,000’
+# 10 = ‘$1,000,000 or more’
+
+# A01000	Net capital gain (less loss) amount
+
+xlfile <- 'Boyd OSC analysis(4).xlsx'
+
+xwalk <- read_excel(here::here('ignore', xlfile),
+                    sheet='2018dictionary',
+                    skip=2)
+xwalk
+ht(xwalk)
+
+stubs <- read_excel(here::here('ignore', xlfile), 
+                    sheet='agistubs',
+                    range='A3:B14') %>%
+              mutate(agi_stub=as.integer(agi_stub))
+stubs
+
+ht2 <- readRDS(here::here('data', 'soi', 'ht2.rds'))
+glimpse(ht2)
+
+ht2a <- ht2  %>%
+  filter(stabbr != "PR") %>%  # PR showed up in 2018
+  left_join(stubs,
+            by='agi_stub')
+count(ht2a, agi_stub, aginame)
+glimpse(ht2a)
+
+# A18425 State and local income taxes amount
+# n18425
+
+# now make a long file with labels
+ht2long <- ht2a %>%
+  pivot_longer(cols = -c(year, stabbr, agi_stub, aginame), names_to="varname") %>%
+  left_join(xwalk %>% 
+              select(varname=variable, description) %>%
+              mutate(varname=str_to_lower(varname)),
+            by = "varname")
+
+n1 <- ht2long %>%
+  filter(varname=="n1") %>% 
+  select(year, stabbr, agi_stub, n1=value)
+
+h2n1 <- ht2long %>%
+  left_join(n1, by = c("year", "stabbr", "agi_stub")) %>%
+  mutate(avgvalue=ifelse(varname %in% c("n1", "mars1", "mars2"), 
+                         value / n1 * 100,
+                         value / n1 * 1000)) %>%
+  group_by(stabbr, agi_stub, varname) %>%
+  mutate(pch_value=value / value[match(year - 1, year)] * 100 - 100,
+         pch_avg=avgvalue / avgvalue[match(year - 1, year)] * 100 - 100) %>%
+  pivot_longer(cols=c(value, avgvalue, pch_value, pch_avg), names_to="measure")
+  
+
+
+h2n1 %>% filter(stabbr=="CA", agi_stub==0, varname=="mars1")
+
+```
+
+
+## Percent change in number of returns
+```{r tab_functions}
+var <- "n1"
+stub <- 0
+st <- "US"
+varstub_pch <- function(var, stub, sts, measname="pch_value"){
+  df <- h2n1 %>%
+    filter(varname==var, agi_stub==stub, stabbr %in% sts, !is.na(value),
+           measure==measname) %>%
+    select(year, stabbr, agi_stub, aginame, varname, description,
+           measure, value) %>%
+    pivot_wider(names_from=year) %>%
+    mutate(stabbr=factor(stabbr, levels=sts)) %>%
+    arrange(stabbr)
+  df
+}
+
+varstate_pch <- function(var, st, measname="pch_value"){
+  df <- h2n1 %>%
+    select(year, stabbr, agi_stub, aginame, varname, 
+           description, measure, value) %>%
+    filter(varname==var, stabbr==st, !is.na(value),
+           measure==measname) %>%
+    pivot_wider(names_from=year) %>%
+    mutate(stabbr=factor(stabbr, levels=sts)) %>%
+    arrange(stabbr)
+  df
+}
+
+
+# varstub_pch("n1", 0, sts) %>% kable(digits=1)
+
+```
+
+
+```{r}
+# define states of interest
+sts <- c("NY", "US", "CT", "MA", "NJ", "CA", "FL", "TX")
+```
+
+
+### % change in number of returns: all returns and selected income groups
+
+#### New York, all income ranges
+The first table below shows the % change in # of tax returns in NY by income range. We normally would expect returns to grow at somewhere near the rate of population or employment growth -- say 0.5% to 1% on average over the long run. The total number of returns grew 0.5% in 2018, with declines in lower income groups and increases in upper income groups. This general pattern is not surprising although some specific numbers may be.
+
+
+```{r}
+varstate_pch("n1", "NY") %>% kable(digits=1, caption="Percent change in number of returns")
+
+```
+
+One reason the number in lower income groups declines while the number in upper income groups increases is that inflation and productivity growth tends to drive people into higher income brackets over time (unless we adjust brackets so that they are different each year, reflecting inflation). 
+
+A second major factor that affects year-to-year growth is the economy, and particularly capital gains. In stock market boom years people may find their taxable income boosted as a result of capital gains, driving them into higher brackets. This is most relevant to upper-income brackets. The table below, copied from [here](https://ycharts.com/indicators/sp_500_total_return_annual) shows total (including dividends) % returns in the S&P 500 on a year-end over year-end basis. Stock market increases tend to be correlated with capital gains, so this likely drove the number of high-income taxpayers up in quite a few of the years in question, including 2016 and 2017. This correlation is not tight and lags and other issues come into play, so I would not over-interpret it. 
+
+!(images/sp500.png)
+
+To test this, we look at capital gains income. The table below shows growth in total capital gains income (not average capital gains). It sure looks like the rapid growth in 2017 had a lot to do with the rapid growth in the number of returns in the highest brackets in 2017, and the general movement through the brackets, more than offsetting the impact of the incentive to defer income out of 2017. (Two notes: (1) this is capital gains reported on federal returns so it no doubt differs some from gains reported on NY returns as reported by the Budget Division, and (2) while the growth rates in the lower income brackets are substantial, they don't have much capital gains so it may not have had a big impact on their overall AGI.)
+
+
+### Capital gains growth in NY
+```{r}
+
+varstate_pch("a01000", "NY") %>% kable(digits=1, caption="Percent change in net capital gains")
+
+```
+
+
+
+A third major factor that affects year to year growth is behavioral shifts in response to actual tax changes and anticipated tax changes. We know there was an incentive to decelerate income out of 2017 into 2018 to take advantage of the lower tax rates enacted for 2018 in the TCJA. It's not obvious from the %-change table above that this happened, but we'll return to this.
+
+
+#### The United States, all income ranges
+The next table shows the same thing for the United States as a whole. The same general pattern of slow growth or decline in the lower income ranges and rapid growth in the upper income ranges holds, for the same reasons.
+
+```{r}
+varstate_pch("n1", "US") %>% kable(digits=1, caption="Percent change in number of returns")
+# varstate_pch("n1", "CA") %>% kable(digits=1)
+# varstate_pch("n1", "CT") %>% kable(digits=1)
+# varstate_pch("n1", "FL") %>% kable(digits=1)
+# varstate_pch("n1", "TX") %>% kable(digits=1)
+
+```
+
+
+### % change in number of returns: New York and selected other states, selected income groups
+In many of the tables that follow, I compare NY to the US, and to CA, CT, FL, MA, NJ, and TX. I chose these states, because they are large, or neighbors, or often considered comparison states for NY, or some combination of these reasons. FL and TX, of course, have no income tax and FL has a very low overall state-local tax burden.
+
+The first table below shows % change in number of returns overall, just to position our heads. There's quite a bit of variation from year to year and I don't understand all of it. FL and TX have pretty big increases in 2017, which we explore further below.
+
+```{r}
+varstub_pch("n1", 0, sts) %>% kable(digits=1, caption="Percent change in number of returns")
+
+```
+
+The next 3 tables show the top 3 income ranges.
+
+```{r}
+# varstub_pch("n1", 7, sts) %>% kable(digits=1)
+varstub_pch("n1", 8, sts) %>% kable(digits=1, caption="Percent change in number of returns")
+varstub_pch("n1", 9, sts) %>% kable(digits=1, caption="Percent change in number of returns")
+varstub_pch("n1", 10, sts) %>% kable(digits=1, caption="Percent change in number of returns")
+```
+
+Given the extraordinary growth in FL and TX in 2017 in the number of returns in the upper income range, let's look at capital gains in all states in that income range. As you can see, they experienced phenomenal growth in capital gains. These data can't tell us whether the increase in the number of FL millionaire returns was due to out-of-state millionaires moving into FL, or non-millionaire Floridians moving into the FL millionaire bracket due to increased income from realization of capital gains and other factors. The lack of state income taxes in FL and TX makes it relatively more attractive for residents of those states to realize capital gains than it is for residents of high-tax states. On the other hand, IRS migration data (not shown here) show that FL does have a steady annual inflow of high-income taxpayers from other places, and NY has a steady outflow. In my opinion based on reviews of research and other data, the 2017 increase likely was predominantly attributable to people being pushed into higher federal tax brackets although there probably was some of both effects.
+
+```{r}
+varstub_pch("a01000", 10, sts) %>% kable(digits=1, caption = "Percent change in capital gains")
+
+```
+
+
+# Tax liability
+
+## Percent change in total tax liability
+```{r}
+varstate_pch("a10300", "NY") %>% kable(digits=1, caption="Percent change in tax liability")
+varstate_pch("a10300", "US") %>% kable(digits=1, caption="Percent change in tax liability")
+
+```
+
+### Average tax liability amount (dollars)
+```{r}
+varstate_pch("a10300", "NY", measname = "avgvalue") %>%
+  kable(digits=0, caption = "Average tax liability", format.args=list(big.mark=","))
+varstate_pch("a10300", "NY", measname = "avgvalue") %>%
+  kable(digits=0, caption = "Average tax liability", format.args=list(big.mark=","))
+```
+
+
+## Top income ranges
+```{r}
+varstub_pch("a10300", 10, sts) %>% kable(digits=1, caption = "Percent change in tax liability")
+```
+
+```{r}
+varstub_pch("a10300", 10, sts, measname = "avgvalue") %>%
+  kable(digits=0, caption = "Average tax liability", format.args=list(big.mark=","))
+```
+
+# Tax as % of AGI
+```{r}
+taxagi <- h2n1 %>%
+  filter(varname %in% c("a00100", "a10300"),
+         measure=="value") %>%
+  select(year, stabbr, agi_stub, aginame, varname, value) %>%
+  pivot_wider(names_from=varname) %>%
+  mutate(taxpct=a10300 / a00100 * 100)
+
+taxagi %>%
+  filter(stabbr =="NY") %>%
+  arrange(stabbr) %>%
+  select(year, stabbr, agi_stub, aginame, taxpct) %>%
+  pivot_wider(names_from=year, values_from=taxpct) %>%
+  kable(digits=1, caption = "Tax liability as % of adjusted gross income")
+
+taxagi %>%
+  filter(stabbr %in% sts, agi_stub==0) %>%
+  mutate(stabbr=factor(stabbr, levels=sts)) %>%
+  arrange(stabbr) %>%
+  select(year, stabbr, agi_stub, aginame, taxpct) %>%
+  pivot_wider(names_from=year, values_from=taxpct) %>%
+  kable(digits=1, caption = "Tax liability as % of adjusted gross income")
+
+taxagi %>%
+  filter(stabbr %in% sts, agi_stub==9) %>%
+  mutate(stabbr=factor(stabbr, levels=sts)) %>%
+  arrange(stabbr) %>%
+  select(year, stabbr, agi_stub, aginame, taxpct) %>%
+  pivot_wider(names_from=year, values_from=taxpct) %>%
+  kable(digits=1, caption = "Tax liability as % of adjusted gross income")
+
+
+```
+
+
+```{r explore, eval=FALSE}
+
+tmp <- ht2 %>%
+  filter(stabbr != "PR") %>%  # PR showed up in 2018
+  select(year, stabbr, agi_stub, a18425, n18425) %>%
+  mutate(agi_stub = as.factor(agi_stub),
+         avg18425 = a18425 / n18425 * 1000) %>%
+  # filter(year==2016)
+  group_by(stabbr, agi_stub) %>%
+  # mutate(n = n())
+  mutate(iavg18425=avg18425 / avg18425[year==2016] * 100) %>%
+  ungroup
+
+tmp %>%
+  filter(agi_stub %in% 7:10) %>%
+  filter(stabbr %in% c("US", "NY", "FL", "CA", "AL", "MS", "NM", "MA", "NJ", "NH")) %>%
+  ggplot(aes(year, iavg18425, colour=agi_stub)) +
+  geom_line() +
+  geom_point() +
+  geom_hline(yintercept = 100) +
+  facet_wrap(~stabbr, scales = "fixed", ncol=5)
+
+
+ht2 %>%
+  select(year, stabbr, agi_stub, a18425, n18425) %>%
+  mutate(agi_stub = as.factor(agi_stub),
+         avg18425 = a18425 / n18425 * 1000) %>%
+  group_by(stabbr, agi_stub) %>%
+  mutate(davg18425=avg18425 - avg18425[year==2016]) %>%
+  ungroup %>%
+  filter(agi_stub %in% 7:10) %>%
+  filter(stabbr %in% c("US", "NY", "FL", "CA", "AL", "MS", "NM", "MA", "NJ", "NH", "CT")) %>%
+  ggplot(aes(year, davg18425 / 1e3, colour=agi_stub)) +
+  geom_line() +
+  geom_point() +
+  scale_y_continuous(breaks=seq(-100, 100, 10)) +
+  geom_hline(yintercept = 0) +
+  facet_wrap(~stabbr, scales = "fixed", ncol=4)
+
+ht2 %>%
+  select(year, stabbr, agi_stub, a18425, n18425) %>%
+  mutate(agi_stub = as.factor(agi_stub),
+         avg18425 = a18425 / n18425 * 1000) %>%
+  group_by(stabbr, agi_stub) %>%
+  # mutate(i18425=n18425 / n18425[year==2016] * 100) %>%
+  mutate(i18425=a18425 / a18425[year==2016] * 100) %>%
+  ungroup %>%
+  filter(agi_stub %in% 7:10) %>%
+  filter(stabbr %in% c("US", "NY", "FL", "CA", "AL", "MS", "NM", "MA", "NJ", "NH", "CT")) %>%
+  ggplot(aes(year, i18425, colour=agi_stub)) +
+  geom_line() +
+  geom_point() +
+  scale_y_continuous(breaks=seq(-100, 200, 10)) +
+  geom_hline(yintercept = 100) +
+  facet_wrap(~stabbr, scales = "fixed", ncol=4)
+
+ns(ht2)
+
+# ht2 %>%
+#   # select(year, stabbr, agi_stub, a18425, n18425, a01400, n01400) %>%
+#   mutate(agi_stub = as.factor(agi_stub),
+#          avg18425 = a18425 / n18425 * 1000) %>%
+#   group_by(stabbr, agi_stub) %>%
+#   # mutate(ivalue=n18425 / n18425[year==2016] * 100) %>%
+#   # mutate(ivalue=a18425 / a18425[year==2016] * 100) %>%
+#   # mutate(ivalue=avg18425 / avg18425[year==2016] * 100) %>%
+#   mutate(value = a00600 / n00600) %>%
+#   mutate(value = a01000) %>%
+#   mutate(ivalue=value / value[year==2016] * 100) %>% # a01400 taxable IRA distributions
+#   ungroup %>%
+#   filter(agi_stub %in% 7:10) %>%
+#   filter(stabbr %in% c("US", "NY", "FL", "CA", "AL", "MS", "NM", "MA", "NJ", "NH", "CT", "TX")) %>%
+#   ggplot(aes(year, ivalue, colour=agi_stub)) +
+#   geom_line() +
+#   geom_point() +
+#   scale_y_continuous(breaks=seq(-100, 200, 10)) + # , limits=c(50, 150)) +
+#   geom_hline(yintercept = 100) +
+#   facet_wrap(~stabbr, scales = "free", ncol=4)
+
+
+```
+
+
+
+```{r eval=FALSE}
+# A10300	Total tax liability amount [11]
+# get n, value, and averages for selected variables
+vars <- c("")
+
+ht2 %>%
+  filter(year %in% 2016:2018,
+         agi_stub == 0,
+         !stabbr %in% c("OA", "PR")) %>%
+  select(year, stabbr, agi_stub, a10300) %>%
+  mutate(year=paste0("y", year)) %>%
+  pivot_wider(names_from = year, values_from=a10300) %>%
+  mutate(p1617=y2017 / y2016 * 100 - 100,
+         p1718 =y2018 / y2017 * 100 - 100) %>%
+  arrange(p1718) %>%
+  kable(format='rst', digits=c(rep(0, 5), 1, 1))
+  
+
+```
+
+
+
+```{r mshare, rows.print = 11, eval=FALSE}
+ht2_all <- readRDS(here::here("data", "soi", "ht2.rds"))
+
+mshare <- ht2_all %>%
+  filter(year==2017) %>%
+  select(stabbr, agi_stub, n1) %>%
+  filter(agi_stub %in% c(0, 8:10)) %>%
+  group_by(stabbr) %>%
+  mutate(pct=n1 / n1[agi_stub == 0],
+         group=paste0("grp", str_pad(agi_stub, width=2, side="left", pad="0"))) %>%
+  select(-n1, -agi_stub) %>%
+  pivot_wider(names_from = group, values_from = pct) %>%
+  ungroup %>%
+  mutate(higroup=grp08 + grp09 + grp10,
+         index10=grp10 / grp10[stabbr == "US"] * 100,
+         indexhi=higroup / higroup[stabbr == "US"] * 100)
+
+mshare %>%
+  arrange(-index10) %>%
+  datatable
+
+```
+
+
+```{r millionaires, rows.print=11, eval=FALSE}
+
+mdf <- ht2_all %>%
+  filter(year==2017) %>%
+  group_by(stabbr) %>%
+  mutate(mpct = n1 / n1[agi_stub == 0] * 100) %>%
+  ungroup %>%
+  filter(agi_stub==10) %>%
+  mutate(avgagi_m=a00100 / n1 / 1e3,
+         marpct=mars2 / n1 * 100,
+         avgkids=numdep / n1,
+         oldpct = elderly / n1 * 100,
+         wagepct = a00200 / a00100 * 100,
+         cgpct = a01000 / a00100 * 100,
+         businc = a00900,
+         partinc = a26270,
+         busincpct=businc / a00100 * 100,
+         partincpct=partinc / a00100 * 100,
+         retinc=a01400 + a01700 + a02500,
+         retincpct=retinc / a00100 * 100,
+         otherpct=100 - wagepct - cgpct - busincpct - partincpct - retincpct) %>%
+  select(stabbr, n1, mpct, avgagi_m, marpct, avgkids, oldpct, wagepct, cgpct, busincpct, partincpct, retincpct, otherpct)
+
+mdf %>%
+  filter(!stabbr %in% c("OA", "DC")) %>%
+  mutate(rank=rank(-mpct)) %>%
+  mutate(across(c(avgkids, contains("pct"), -mpct), function(x) round(x, 1))) %>%
+  mutate(across(avgagi_m, function(x) round(x, 2))) %>%
+  mutate(across(mpct, function(x) round(x, 2))) %>%
+  arrange(rank) %>%
+  filter(row_number() %in% 1:10 | stabbr=="US") %>%
+  select(stabbr, n1, mpct, rank, everything()) %>%
+  datatable(options = list(pageLength = 11))
+  
+
+
+```
+
+
+```{r ts, eval=FALSE}
+data(package="bdata")
+glimpse(soiall)
+count(soiall, year) # 2004-2013
+count(soiall, vname)
+count(soiall, incgrp)
+
+count(soiall, year, incgrp)
+
+
+
+
+ht2m_prior <- soiall %>%
+  filter(year %in% 2004:2012) %>%
+  filter(vname=="nret") %>%
+  mutate(agi_stub=case_when(incgrp == "$1m+" ~ 10,
+                            incgrp == "all" ~ 0,
+                            TRUE ~ NA_real_)) %>%
+  filter(agi_stub %in% c(0, 10)) %>%
+  select(year, stabbr, agi_stub, n1=value)
+
+ht2m_prior %>% filter(year==2012, stabbr=="US")
+ht2_all %>% filter(year==2012, stabbr=="US", agi_stub %in% c(0, 10)) %>% select(year, stabbr, agi_stub, n1)
+# year stabbr agi_stub n1
+# 2012	US	0	145025450	
+# 2012	US	10	392270
+# year stabbr agi_stub n1
+# 2012	US	0	145025450	
+# 2012	US	10	392270	
+  
+
+ht2_all
+glimpse(ht2_all)
+ht2_all %>%
+  bind_rows(ht2m_prior %>% filter(year %in% 2010:2011)) %>% # only 2 years with the $1m+ category
+  select(year, stabbr, agi_stub, n1) %>%
+  group_by(stabbr, year) %>%
+  mutate(n1_all=n1[agi_stub==0]) %>%
+  ungroup %>%
+  filter(agi_stub==10) %>%
+  mutate(mpct=n1 / n1_all * 100) %>%
+  filter(stabbr %in% c("CT", "NY", "MA", "NJ", "CA", "FL", "TX")) %>%
+  ggplot(aes(year, mpct, colour=stabbr)) +
+  geom_line() +
+  geom_point()
+
+ht2_all %>%
+  bind_rows(ht2m_prior %>% filter(year %in% 2010:2011)) %>% # only 2 years with the $1m+ category
+  select(year, stabbr, agi_stub, n1) %>%
+  group_by(stabbr, year) %>%
+  mutate(n1_all=n1[agi_stub==0]) %>%
+  ungroup %>%
+  filter(agi_stub==10) %>%
+  mutate(mpct=n1 / n1_all * 100) %>%
+  filter(stabbr %in% c("CT", "NY", "MA", "NJ", "CA", "FL", "TX")) %>%
+  ggplot(aes(year, n1, colour=stabbr)) +
+  geom_line() +
+  geom_point()
+
+
+# something happened in FL, TX in 2016, 2017
+ht2_all %>%
+  bind_rows(ht2m_prior %>% filter(year %in% 2010:2011)) %>% # only 2 years with the $1m+ category
+  select(year, stabbr, agi_stub, n1) %>%
+  group_by(stabbr, year) %>%
+  mutate(n1_all=n1[agi_stub==0]) %>%
+  ungroup %>%
+  filter(agi_stub==10) %>%
+  group_by(stabbr) %>%
+  mutate(im=n1 / n1[year==2010] * 100) %>%
+  filter(stabbr %in% c("CT", "NY", "MA", "NJ", "CA", "FL", "TX")) %>%
+  ggplot(aes(year, im, colour=stabbr)) +
+  geom_line() +
+  geom_point()
+
+# share of m's
+st <- "CA"
+
+sts <- c("CA", "CT", "FL", "IL", "MA", "NJ", "NY", "TX", "WA")
+ht2_all %>%
+  bind_rows(ht2m_prior %>% filter(year %in% 2010:2011)) %>% # only 2 years with the $1m+ category
+  filter(agi_stub %in% c(0, 10)) %>%
+  select(year, stabbr, agi_stub, n1) %>%
+  mutate(agi_stub=paste0("stub", str_pad(agi_stub, width=2, side="left", pad="0"))) %>%
+  pivot_wider(values_from = n1, names_from = agi_stub) %>%
+  mutate(stubres=stub00 - stub10) %>%
+  group_by(year) %>%
+  mutate(across(starts_with("stub"), function(x) x / x[stabbr=="US"] * 100)) %>%
+  filter(stabbr %in% sts) %>%
+  select(-stub00) %>%
+  pivot_longer(starts_with("stub")) %>%
+  group_by(name) %>%
+  mutate(ivalue=value / value[year==2010] * 100) %>%
+  ggplot(aes(year, ivalue, colour=name)) +
+  geom_line() +
+  geom_point() +
+  facet_wrap(~stabbr, ncol = 3, scales="free")
+  
+
+
+```
+
+

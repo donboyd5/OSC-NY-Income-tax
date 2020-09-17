@@ -5,6 +5,9 @@
 # alt-l, shift-alt-l
 # alt-r
 
+# links ----
+# https://www.irs.gov/downloads/irs-soi  # static files
+
 # libraries ----
 library(tidyverse)
 library(readxl)
@@ -31,14 +34,17 @@ devtools::session_info()
 # 9 = ‘$500,000 under $1,000,000’
 # 10 = ‘$1,000,000 or more’
 
+# https://www.irs.gov/pub/irs-soi/18in55cmagi.csv
 # https://www.irs.gov/pub/irs-soi/17in54cmcsv.csv
 # https://www.irs.gov/pub/irs-soi/16in54cmcsv.csv
-# 
+# suffix <- "xlsx" else suffix <- "csv"
 ubase <- "https://www.irs.gov/pub/irs-soi/"
-for(y in 2012:2017){
-  if(y==2013) suffix <- "xlsx" else suffix <- "csv"
-  fn <- paste0(str_sub(y, 3, 4), "in54cmcsv.", suffix)
+for(y in 2012:2018){
+  if(y==2013) fn <- "13in54cmcsv.xlsx" else 
+    if(y %in% 2014:2017) fn <- paste0(str_sub(y, 3, 4), "in54cmcsv.csv") else
+      if(y == 2018) fn <- "18in55cmagi.csv"
   url <- paste0(ubase, fn)
+  # print(url)
   download.file(url, here::here("data", "soi", fn), mode="wb")
 }
 
@@ -53,7 +59,9 @@ df %>%
 # now get the time series
 f <- function(y) {
   print(y)
-  fn <- paste0(str_sub(y, 3, 4), "in54cmcsv.csv")
+  if(y < 2018) fn <- paste0(str_sub(y, 3, 4), "in54cmcsv.csv") else
+    if(y == 2018) fn <- "18in55cmagi.csv"
+  # fn <- paste0(str_sub(y, 3, 4), "in54cmcsv.csv")
   df <- read_csv(here::here("data", "soi", fn), col_types=cols(.default = col_character()))
   df %>%
     setNames(str_to_lower(names(.))) %>%
@@ -61,7 +69,7 @@ f <- function(y) {
     rename(stabbr=state) %>%
     select(year, everything())
 }
-tmp <- map_df(2012:2017, f)
+tmp <- map_df(2012:2018, f)
 glimpse(tmp)
 count(tmp, agi_stub)
 

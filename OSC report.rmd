@@ -8,6 +8,9 @@ output:
     fig_height: 6
     fig_width: 8
     toc: yes
+  html_document:
+    toc: yes
+    df_print: paged
 editor_options:
   chunk_output_type: inline
 ---
@@ -24,6 +27,13 @@ editor_options:
 -->
 
 
+
+```{r setup, echo=FALSE, message=FALSE, warning=FALSE, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+
+
 ```{r notes, include=FALSE}
 # It can be hard to get tables to work properly. It seems like it is best to have chunk output inline.
 
@@ -33,23 +43,25 @@ editor_options:
 ```{r libs, echo=FALSE, message=FALSE, warning=FALSE, include=FALSE}
 # source(here::here("includes", "libraries.r"))
 library(tidyverse)
+library(readxl)
+library(btools)
+library(bdata)
+library(DT)
 library(microweight)
+library(knitr)
 devtools::session_info()
-
-```
-
-
-```{r setup_and_globals, echo=FALSE, message=FALSE, warning=FALSE, include=FALSE}
-# fredr_set_key(globals$fred_apikey)
-knitr::opts_chunk$set(echo = FALSE)
 
 ```
 
 
 # SOI Historical Table 2
 
-```{r getht2-ts, rows.print = 11}
+## Observations
 
+
+## Descriptive statistics
+
+```{r load_data, rows.print = 11, include=FALSE}
 # 0 = No AGI Stub
 # 1 = ‘Under $1’
 # 2 = '$1 under $10,000'
@@ -62,51 +74,202 @@ knitr::opts_chunk$set(echo = FALSE)
 # 9 = ‘$500,000 under $1,000,000’
 # 10 = ‘$1,000,000 or more’
 
-# https://www.irs.gov/pub/irs-soi/17in54cmcsv.csv
-# https://www.irs.gov/pub/irs-soi/16in54cmcsv.csv
-# 
-ubase <- "https://www.irs.gov/pub/irs-soi/"
-for(y in 2012:2017){
-  if(y==2013) suffix <- "xlsx" else suffix <- "csv"
-  fn <- paste0(str_sub(y, 3, 4), "in54cmcsv.", suffix)
-  url <- paste0(ubase, fn)
-  download.file(url, here::here("data", "soi", fn), mode="wb")
-}
+# A01000	Net capital gain (less loss) amount
 
-# create a csv version of the 2013 file
-df <- read_excel(here::here("data", "soi", "13in54cmcsv.xlsx"))
-glimpse(df)
-names(df)
-# "State"    "agi_stub" "N1"
-df %>%
-  write_csv(here::here("data", "soi", "13in54cmcsv.csv"))
+xlfile <- 'Boyd OSC analysis(4).xlsx'
 
-# now get the time series
-f <- function(y) {
-  print(y)
-  fn <- paste0(str_sub(y, 3, 4), "in54cmcsv.csv")
-  df <- read_csv(here::here("data", "soi", fn), col_types=cols(.default = col_character()))
-  df %>%
-    setNames(str_to_lower(names(.))) %>%
-    mutate(year=y) %>%
-    rename(stabbr=state) %>%
-    select(year, everything())
-}
-tmp <- map_df(2012:2017, f)
-glimpse(tmp)
-count(tmp, agi_stub)
+xwalk <- read_excel(here::here('ignore', xlfile), sheet='2018dictionary')
+xwalk
+ht(xwalk)
 
-# which variables should be character? only stabbr
-cvars <- c("stabbr")
-glimpse(tmp %>% filter(year==2016))
+stubs <- read_excel(here::here('ignore', 'Boyd OSC analysis(4).xlsx'), 
+                    sheet='agistubs',
+                    range='A3:B14') %>%
+              mutate(agi_stub=as.integer(agi_stub))
+stubs
 
-ht2_all <- tmp %>%
-  mutate(across(-c(stabbr, year, agi_stub), parse_number),
-         agi_stub=as.integer(agi_stub))
-glimpse(ht2_all)
-saveRDS(ht2_all, here::here("data", "soi", "ht2.rds"))
+ht2 <- readRDS(here::here('data', 'soi', 'ht2.rds'))
+glimpse(ht2)
+
+ht2a <- ht2  %>%
+  filter(stabbr != "PR") %>%  # PR showed up in 2018
+  left_join(stubs,
+            by='agi_stub')
+count(ht2a, agi_stub, aginame)
+glimpse(ht2a)
+
+# A18425 State and local income taxes amount
+# n18425
+
+# now make a long file with labels
+ht2long <- ht2a %>%
+  pivot_longer(cols = -c(year, stabbr, agi_stub, aginame)) %>%
+  left_join(xwalk %>% 
+              select(name=variable, description) %>%
+              mutate(name=str_to_lower(name)),
+            by = "name")
+
+n1 <- ht2long %>%
+  filter(name=="n1") %>% 
+  select(year, stabbr, agi_stub, n1=value)
+
+h2n1 <- ht2long %>%
+  left_join(n1, by = c("year", "stabbr", "agi_stub")) %>%
+  mutate(avgvalue=ifelse(name %in% c("n1", "mars1", "mars2"), 
+                         value / n1 * 100,
+                         value / n1 * 1000))
+
+
+h2n1 %>% filter(stabbr=="CA", agi_stub==0, name=="mars1")
 
 ```
+
+
+### Percent change from year to year, selected variables: NY, US, and selected large states
+```{r}
+varstub_pch <- function(var, stub, sts){
+  df <- h2n1 %>%
+    filter(name==var, agi_stub==stub, stabbr %in% sts) %>%
+    group_by(stabbr, agi_stub) %>%
+    arrange(year) %>%
+    mutate(pch=value / value[match(year - 1, year)] * 100 - 100) %>%
+    filter(!is.na(pch)) %>%
+    select(-value, -n1) %>%
+    pivot_wider(names_from=year, values_from=pch) %>%
+    mutate(stabbr=factor(stabbr, levels=sts)) %>%
+    arrange(stabbr)
+  df
+}
+
+
+# define states of interest
+sts <- c("NY", "US", "CA", "CT", "FL", "TX")
+
+# varstub_pch("n1", 0, sts) %>% kable(digits=1)
+
+```
+
+
+#### % change in number of returns: all returns and selected income groups
+```{r}
+
+varstub_pch("n1", 0, sts) %>% kable(digits=1)
+
+```
+
+
+
+### 2016 to 2018
+#### Raw % change in tax
+
+
+
+```{r explore, eval=FALSE}
+
+tmp <- ht2 %>%
+  filter(stabbr != "PR") %>%  # PR showed up in 2018
+  select(year, stabbr, agi_stub, a18425, n18425) %>%
+  mutate(agi_stub = as.factor(agi_stub),
+         avg18425 = a18425 / n18425 * 1000) %>%
+  # filter(year==2016)
+  group_by(stabbr, agi_stub) %>%
+  # mutate(n = n())
+  mutate(iavg18425=avg18425 / avg18425[year==2016] * 100) %>%
+  ungroup
+
+tmp %>%
+  filter(agi_stub %in% 7:10) %>%
+  filter(stabbr %in% c("US", "NY", "FL", "CA", "AL", "MS", "NM", "MA", "NJ", "NH")) %>%
+  ggplot(aes(year, iavg18425, colour=agi_stub)) +
+  geom_line() +
+  geom_point() +
+  geom_hline(yintercept = 100) +
+  facet_wrap(~stabbr, scales = "fixed", ncol=5)
+
+
+ht2 %>%
+  select(year, stabbr, agi_stub, a18425, n18425) %>%
+  mutate(agi_stub = as.factor(agi_stub),
+         avg18425 = a18425 / n18425 * 1000) %>%
+  group_by(stabbr, agi_stub) %>%
+  mutate(davg18425=avg18425 - avg18425[year==2016]) %>%
+  ungroup %>%
+  filter(agi_stub %in% 7:10) %>%
+  filter(stabbr %in% c("US", "NY", "FL", "CA", "AL", "MS", "NM", "MA", "NJ", "NH", "CT")) %>%
+  ggplot(aes(year, davg18425 / 1e3, colour=agi_stub)) +
+  geom_line() +
+  geom_point() +
+  scale_y_continuous(breaks=seq(-100, 100, 10)) +
+  geom_hline(yintercept = 0) +
+  facet_wrap(~stabbr, scales = "fixed", ncol=4)
+
+ht2 %>%
+  select(year, stabbr, agi_stub, a18425, n18425) %>%
+  mutate(agi_stub = as.factor(agi_stub),
+         avg18425 = a18425 / n18425 * 1000) %>%
+  group_by(stabbr, agi_stub) %>%
+  # mutate(i18425=n18425 / n18425[year==2016] * 100) %>%
+  mutate(i18425=a18425 / a18425[year==2016] * 100) %>%
+  ungroup %>%
+  filter(agi_stub %in% 7:10) %>%
+  filter(stabbr %in% c("US", "NY", "FL", "CA", "AL", "MS", "NM", "MA", "NJ", "NH", "CT")) %>%
+  ggplot(aes(year, i18425, colour=agi_stub)) +
+  geom_line() +
+  geom_point() +
+  scale_y_continuous(breaks=seq(-100, 200, 10)) +
+  geom_hline(yintercept = 100) +
+  facet_wrap(~stabbr, scales = "fixed", ncol=4)
+
+ns(ht2)
+
+ht2 %>%
+  # select(year, stabbr, agi_stub, a18425, n18425, a01400, n01400) %>%
+  mutate(agi_stub = as.factor(agi_stub),
+         avg18425 = a18425 / n18425 * 1000) %>%
+  group_by(stabbr, agi_stub) %>%
+  # mutate(ivalue=n18425 / n18425[year==2016] * 100) %>%
+  # mutate(ivalue=a18425 / a18425[year==2016] * 100) %>%
+  # mutate(ivalue=avg18425 / avg18425[year==2016] * 100) %>%
+  mutate(value = a00600 / n00600) %>%
+  mutate(value = a01000) %>%
+  mutate(ivalue=value / value[year==2016] * 100) %>% # a01400 taxable IRA distributions
+  ungroup %>%
+  filter(agi_stub %in% 7:10) %>%
+  filter(stabbr %in% c("US", "NY", "FL", "CA", "AL", "MS", "NM", "MA", "NJ", "NH", "CT", "TX")) %>%
+  ggplot(aes(year, ivalue, colour=agi_stub)) +
+  geom_line() +
+  geom_point() +
+  scale_y_continuous(breaks=seq(-100, 200, 10)) + # , limits=c(50, 150)) +
+  geom_hline(yintercept = 100) +
+  facet_wrap(~stabbr, scales = "free", ncol=4)
+
+
+```
+
+
+## Descriptive statistics
+### 2016 to 2018
+#### Raw % change in tax
+```{r}
+# A10300	Total tax liability amount [11]
+# get n, value, and averages for selected variables
+vars <- c("")
+
+ht2 %>%
+  filter(year %in% 2016:2018,
+         agi_stub == 0,
+         !stabbr %in% c("OA", "PR")) %>%
+  select(year, stabbr, agi_stub, a10300) %>%
+  mutate(year=paste0("y", year)) %>%
+  pivot_wider(names_from = year, values_from=a10300) %>%
+  mutate(p1617=y2017 / y2016 * 100 - 100,
+         p1718 =y2018 / y2017 * 100 - 100) %>%
+  arrange(p1718) %>%
+  kable(format='rst', digits=c(rep(0, 5), 1, 1))
+  
+
+```
+
 
 
 ## 2017
