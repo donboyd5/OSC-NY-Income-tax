@@ -8,4 +8,5 @@ data/
 *.csv
 *.xls*
 *.rds
-
+*.html
+*.png

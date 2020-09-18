@@ -11,6 +11,8 @@ output:
   html_document:
     toc: yes
     df_print: paged
+  pdf_document:
+    toc: yes
 editor_options:
   chunk_output_type: inline
 ---
@@ -44,10 +46,9 @@ knitr::opts_chunk$set(echo = FALSE)
 # source(here::here("includes", "libraries.r"))
 library(tidyverse)
 library(readxl)
-library(btools)
-library(bdata)
+# library(btools) # Matt, get from my github page if needed
+# library(bdata) # Matt, get from my github page if needed
 library(DT)
-library(microweight)
 library(knitr)
 devtools::session_info()
 
@@ -56,10 +57,11 @@ devtools::session_info()
 
 **Use the links above to navigate this document (Ctrl-home to return to the top to access the links).**
 
-# Observations
 
-
-# Descriptive statistics
+<!-- 
+Prepare all of the data, and prepare and save scatterplots in advance, so that conclusions are available for the first section of the document. Other analysis can be done on the fly in later sections.
+    
+-->
 
 ```{r prep_data, rows.print = 11, include=FALSE}
 # 0 = No AGI Stub
@@ -82,7 +84,7 @@ xwalk <- read_excel(here::here('ignore', xlfile),
                     sheet='2018dictionary',
                     skip=2)
 xwalk
-ht(xwalk)
+# ht(xwalk)
 
 stubs <- read_excel(here::here('ignore', xlfile), 
                     sheet='agistubs',
@@ -129,7 +131,127 @@ h2n1 <- ht2long %>%
 
 h2n1 %>% filter(stabbr=="CA", agi_stub==0, varname=="mars1")
 
+# examine an extreme outlier -- WI tax liability, stub 1, 2016
+check <- h2n1 %>% 
+  filter(stabbr=="WI", agi_stub==1, varname=="a10300", measure=="value") %>%
+  select(-measure) %>%
+  arrange(varname, agi_stub, year)
+DT::datatable(check)
+# taxagi %>% filter((stabbr=="WI" & agi_stub==1)) # a10300 for WI in stub 1 in 2016 is an outlier
+
+taxagi <- h2n1 %>%
+  filter(varname %in% c("a00100", "a10300"),
+         measure=="value") %>%
+  select(year, stabbr, agi_stub, aginame, varname, value) %>%
+  pivot_wider(names_from=varname) %>%
+  mutate(taxpct=a10300 / a00100 * 100)
+
 ```
+
+
+```{r scatterplot, fig.height=7, fig.width=7, dpi=500, include=FALSE}
+# scatterplot of change in average tax rate
+# taxagi
+# taxagi %>% filter((stabbr=="WI" & agi_stub==1)) # a10300 for WI in stub 1 in 2016 is an outlier
+
+
+pdata <- taxagi %>%
+  filter(year %in% 2016:2018, stabbr!="OA") %>%
+  select(year, stabbr, agi_stub, aginame, taxpct) %>%
+  pivot_wider(names_from = year, names_prefix="y", values_from = taxpct) %>%
+  mutate(change = `y2018` - `y2016`)
+
+
+f <- function(baseyear){
+  basevar <- paste0("y", baseyear)
+  pdata2 <- pdata %>%
+    filter(!(stabbr=="WI" & agi_stub==1), # outlier
+           stabbr != "DC") %>%
+    mutate(grp=case_when(stabbr=="NY" ~ 1,
+                         stabbr == "US" ~ 2,
+                        TRUE ~ 3),
+           grp=factor(grp),
+           agi_stub=factor(agi_stub, levels=stubs$agi_stub, labels=stubs$aginame),
+           base=get(basevar)) %>%
+    arrange(agi_stub, stabbr)
+  
+  facetlims <- pdata2 %>% 
+    group_by(agi_stub) %>% 
+    summarise(min = min(base, y2018), max = max(base, y2018), .groups="drop") %>%
+    pivot_longer(cols=-agi_stub) %>%
+    mutate(stabbr=NA_character_, grp=as.factor(1)) %>%
+    select(agi_stub, stabbr, grp, base=value, y2018=value)
+  
+  
+  p <- pdata2 %>%
+    ggplot(aes(base, y2018, colour=grp, label=stabbr)) +
+      scale_colour_manual(values=c("black", "blue", "red")) +
+      geom_text(size=2.25) +
+      scale_x_continuous(name=paste0("Average tax rate in ", baseyear, " (%)")) +
+      scale_y_continuous(name="Average tax rate in 2018 (%)") +
+      geom_blank(data = facetlims) +
+      geom_abline(slope=1, intercept=0, size=0.4, colour="red") +
+      theme_bw() +
+      theme(legend.position = "none") +
+      labs(caption="Caution: Adjusted gross income definition has changed across years") +
+      theme(plot.caption = element_text(hjust=0, size=rel(.8))) +
+      ggtitle(paste0("Average tax rates as % of adjusted gross income in ", baseyear, " and 2018"),
+              subtitle = paste0("Diagonal line shows average tax rate in ", baseyear)) +
+     facet_wrap(vars(agi_stub), ncol=3, scales="free")
+  p
+}
+
+psave <- function(baseyear){
+  p <- f(baseyear)
+  fname <- paste0("avgtax2018_vs", baseyear, ".png")
+  ggsave(here::here("images", fname), plot=p, width=7, height=7, units="in", scale=1.5, dpi=500)
+  # return(NULL)
+}
+psave(2016)
+psave(2017)
+
+
+```
+
+
+This document has two main sections:
+
++  Observations and conclusions, immediately below, and
++  Descriptive analysis
+
+The observations and conclusions focus on the main points so far. The descriptive analysis is just me wandering through the data and is not necessarily in any sort of priority order.
+
+# Observations and conclusions
+
+The figure below shows the key observations so far. Each panel shows total federal income tax as a percentage of adjusted gross income in 2017 and 2018 in each income range the IRS reports. The horizontal axis shows 2017 rates and the vertical axis shows 2018 rates.
+
+In essence this is an effective tax rate, although we have to be a little cautious in treating it as precisely comparable across years because the definition of AGI changed between 2017 and 2018 and I need to investigate the extent to which the denominator changed. We would prefer to have the same definition in each year but we are limited by the data we have.
+
+States above the diagonal line had a higher effective tax rate in 2018 than in 2017, while states below the line had a lower effective tax rate. States are labeled, with New York in blue and the national average in red. We can't identify all states in all panels. If that becomes important to you, I can show each panel separately and larger. I'll add some tables in a later iteration, also, which will allow separate identification of states.
+
+Using language a little loosely, we can see that in all but the $1 million and higher income range, New Yorkers had a tax cut (lower effective tax rate). We can also see that for incomes of $100k and higher, the tax reduction for New Yorkers was less than for most other states and often it is near other New England or northeastern states (i.e., other high-tax states).
+
+We have to be a little cautious about interpretation. Many factors affect the tax rate within an income range, most of which we can't get at with these data. For example, we can see that within each income range, New York is to the right - it has a higher effective rate than most other states in the same income range. This probably means that New Yorkers typically are more concentrated in the higher-income portion of each income range and are subject to higher marginal rates, although we need microdata such as those we will use in the second part of this project to get at that issue.
+
+In addition, every year is unusual in some way. The comparison year of 2017 is unusual because there were incentives to push income out of that year and into 2018 when rates were lower, and to accelerate deductions into 2017 when rates were higher, and of course there were incentives to push SALT deductions into 2017. I address this, partially, by putting a similar figure later in this document that compares 2018 to 2016. The general patterns are quite similar so I use 2017 here reduce risk of confusion. Again, the best way to address this is with microdata.
+
+The rest of this document has my stream-of-consciousness reveiew of data and is not in priority order. Some of it may be of interest to you. In the final memo I can clean some things up in an effort to highlight more-important points.
+
+(Matt, I will add a lot more descriptive analysis between now and Wednesday, particularly re SALT deductions. But I can't get to hat before Monday.)
+
+
+```{r echo=FALSE, fig.height=9, fig.width=9, out.height='100%', out.width='100%', include=TRUE}
+# {r fig.width=9, fig.height=9, out.width='100%', out.height='100%'}
+# {r fig.width=9, fig.height=10}
+# {r out.width='100%', out.height='100%'}
+# Inserting from file did not work well so instead create plot on the fly.
+# ![Average tax rates as % of AGI in 2017 and 2018](images/avgtax2018_vs2017.png)
+f(2017)
+```
+
+
+
+# Descriptive statistics
 
 
 ## Percent change in number of returns
@@ -188,7 +310,7 @@ One reason the number in lower income groups declines while the number in upper 
 
 A second major factor that affects year-to-year growth is the economy, and particularly capital gains. In stock market boom years people may find their taxable income boosted as a result of capital gains, driving them into higher brackets. This is most relevant to upper-income brackets. The table below, copied from [here](https://ycharts.com/indicators/sp_500_total_return_annual) shows total (including dividends) % returns in the S&P 500 on a year-end over year-end basis. Stock market increases tend to be correlated with capital gains, so this likely drove the number of high-income taxpayers up in quite a few of the years in question, including 2016 and 2017. This correlation is not tight and lags and other issues come into play, so I would not over-interpret it. 
 
-!(images/sp500.png)
+![Total return, S&P 500, year-end to year-end](images/sp500.png)
 
 To test this, we look at capital gains income. The table below shows growth in total capital gains income (not average capital gains). It sure looks like the rapid growth in 2017 had a lot to do with the rapid growth in the number of returns in the highest brackets in 2017, and the general movement through the brackets, more than offsetting the impact of the incentive to defer income out of 2017. (Two notes: (1) this is capital gains reported on federal returns so it no doubt differs some from gains reported on NY returns as reported by the Budget Division, and (2) while the growth rates in the lower income brackets are substantial, they don't have much capital gains so it may not have had a big impact on their overall AGI.)
 
@@ -274,13 +396,21 @@ varstub_pch("a10300", 10, sts, measname = "avgvalue") %>%
 ```
 
 # Tax as % of AGI
+
+## Scaterplots for 2018 compared to 2017 and 2016
+
+```{r fig.width=9, fig.height=9, out.width='100%', out.height='100%'}
+f(2017)
+```
+
+
+```{r fig.width=9, fig.height=9, out.width='100%', out.height='100%'}
+f(2016)
+```
+
+
+## Tables
 ```{r}
-taxagi <- h2n1 %>%
-  filter(varname %in% c("a00100", "a10300"),
-         measure=="value") %>%
-  select(year, stabbr, agi_stub, aginame, varname, value) %>%
-  pivot_wider(names_from=varname) %>%
-  mutate(taxpct=a10300 / a00100 * 100)
 
 taxagi %>%
   filter(stabbr =="NY") %>%
@@ -307,6 +437,10 @@ taxagi %>%
 
 
 ```
+
+
+
+
 
 
 ```{r explore, eval=FALSE}
