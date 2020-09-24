@@ -10,3 +10,5 @@ data/
 *.rds
 *.html
 *.png
+*.xz
+tlcheck*/

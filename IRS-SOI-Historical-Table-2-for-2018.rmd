@@ -28,6 +28,25 @@ editor_options:
     
 -->
 
+<!--
+pdf formatting:
+see https://stackoverflow.com/questions/24657216/caption-above-figure-using-knitr-latex-pdf
+
+---
+output: pdf_document
+header-includes:
+   - \usepackage{floatrow}
+   - \floatsetup[figure]{capposition=top}
+---
+
+
+#   ```{r fig.cap="cap, cap, and cap"}
+#   plot(1)
+#   ```
+
+-->
+
+
 
 ```{r setup, echo=FALSE, message=FALSE, warning=FALSE, include=FALSE}
 knitr::opts_chunk$set(echo = FALSE)
