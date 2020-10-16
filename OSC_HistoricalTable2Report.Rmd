@@ -1,0 +1,925 @@
+---
+title: "IRS SOI Historical Table 2 for 2018"
+author: "Don Boyd"
+date: "`r format(Sys.time(), '%B %d, %Y')`"
+output:
+  html_notebook:
+    df_print: paged
+    fig_height: 6
+    fig_width: 8
+    toc: yes
+editor_options:
+  chunk_output_type: inline
+---
+
+
+<!-- 
+
+<style type="text/css">
+div.main-container {
+  max-width: 100%;
+  margin-left: auto;
+  margin-right: auto;
+}
+</style>
+
+  html_document:
+    fig_height: 6
+    fig_width: 8
+    toc: yes
+    toc_depth: 5
+editor_options:
+  chunk_output_type: console or inline    
+  
+  html_document:
+    toc: yes
+    df_print: paged
+  word_document:
+    toc: yes
+  pdf_document:
+    toc: yes
+    
+-->
+
+
+<!--
+The goal is to explain using state-level federal income tax data from IRS Historical Table 2 for 2018 (when released) how New Yorkers’ federal income tax liability changed in 2018 (the first year in which the Tax Cuts and Jobs Act was in effect) relative to 2017 and earlier years, and how New York fared in comparison to other states. I assume the product will be a memo from me to the Comptroller’s office that examines and quantifies these issues, with appropriate tables and figures.
+
+The work would answer questions such as,
++  How much did federal income tax liability of New Yorkers change between 2017 and 2018?
++  How much of that appears to be attributable to changes in the size of the taxpaying population and to changes in underlying income (e.g., wages, business income), 
++  How much appears to be attributable to actions by taxpayers in anticipation of TCJA, and 
++  How much appears to be attributable to changes in the tax structure? 
++  To what extent do changes in New York appear similar to those in other states, or different?
+
+It could not answer these questions by feature of the law (it could not quantify how much of the tax change is attributable to SALT vs. rate changes or other features) because this project is focused on state-level summary data, not data on individual taxpayers.
+
+I will do this by identifying, isolating, and quantifying to the extent possible with these data and with New York economic data the extent to which federal income tax liability of New Yorkers changed as a result of:
++  Changes in the economy in New York relative to other states
++  Actions by taxpayers in New York and other states in anticipation of the TCJA to:
++    Accelerate deductions into 2017 to take advantage of deductibility at the higher 2017 tax rates;
++    Accelerate deductions for state and local taxes into 2017 to take advantage of (a) full SALT deductibility prior to institution of the TCJA SALT cap, and (b) the higher tax rates in 2017;
++    Push income from 2017 into 2018 to take advantage of the lower income tax rates in 2018
++  The new tax law rates, structure, etc.
+
+
+# Just a quick follow up. To do things the way we discussed, perfectly, I will want to:
+# - keep the 50 states and DC (drop PR and other areas, and drop the US total)
+# - recompute the US total as the sum of 50 states plus DC
+# That should get us the same % share as Mary has (assuming she did it the same way, as I believe she did).
+# 
+# This is fine - not much work - but it does mean that the US total I show will be less than the total people will find if they go to the IRS website, because the IRS US total includes PR and other areas. I can put a note in the document that mentions this, so anyone who compares will understand the reason. (In fact, the US total I show now excludes DC, PR, and other areas so I'd have to have a note anyway.) This, too is fine with me. I just wanted to let you know that the totals will be different, with a perfectly good explanation.
+# 
+# I'll plan to go ahead with this approach unless you say otherwise.
+
+-->
+
+
+```{r setup, echo=FALSE, message=FALSE, warning=FALSE, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+options(width = 150)
+```
+
+
+```{r libraries, echo=FALSE, message=FALSE, warning=FALSE, include=FALSE}
+# source(here::here("includes", "libraries.r"))
+library(tidyverse)
+# if more than 60 rows, print 60 - enough for states
+options(tibble.print_max = 60, tibble.print_min = 60) 
+library(scales)
+library(readxl)
+library(RColorBrewer)
+
+library(maps)
+library(usmap)
+library(grid)
+library(gridExtra)
+
+# library(btools) # Matt, get from my github page if needed
+# library(bdata) # Matt, get from my github page if needed
+library(ggrepel)
+library(gt)
+library(glue)
+library(DT)
+library(knitr)
+library(kableExtra)
+library(btools)
+
+devtools::session_info()
+
+```
+
+
+```{r constants}
+# define states of interest
+sts <- c("NY", "US", "CT", "MA", "NJ", "CA", "FL", "TX")
+compstates <- c("CA","CT", "FL",  "MA", "NJ", "TX")
+
+# Note: 
+# N09600	Number of returns with alternative minimum tax 
+# A09600	Alternative minimum tax amount
+
+# A06500	Income tax after credits amount   	1040:13	Num
+# A10300	Total tax liability amount [11]  	1040:15	Num
+
+```
+
+
+```{r functions}
+fstubs <- function(agi_stub){
+  factor(agi_stub, levels=stubs$agi_stub, labels=stubs$aginame)
+}
+
+# stub <- 0
+# st <- "US"
+varstub_pch <- function(var, stub, sts, measname="pch_value"){
+  df <- h2n1 %>%
+    filter(varname==var, agi_stub==stub, stabbr %in% sts, !is.na(value),
+           measure==measname) %>%
+    select(year, stabbr, agi_stub, aginame, varname, description,
+           measure, value) %>%
+    pivot_wider(names_from=year) %>%
+    mutate(stabbr=factor(stabbr, levels=sts)) %>%
+    arrange(stabbr)
+  df
+}
+
+
+varstate_pch <- function(var, st, measname="pch_value"){
+  df <- h2n1 %>%
+    select(year, stabbr, agi_stub, aginame, varname, 
+           description, measure, value) %>%
+    filter(varname==var, stabbr==st, !is.na(value),
+           measure==measname) %>%
+    pivot_wider(names_from=year) %>%
+    mutate(stabbr=factor(stabbr, levels=sts)) %>%
+    arrange(stabbr)
+  df
+}
+
+# varstub_pch("n1", 0, sts) %>% kable(digits=1)
+
+```
+
+
+```{r map_setup, include=FALSE}
+#.. Functions
+theme_map <- function(base_size=9, base_family="") {
+  # see:
+  # https://socviz.co/maps.html
+  # https://github.com/kjhealy/socviz
+  # https://cran.r-project.org/web/packages/usmap/vignettes/mapping.html
+  require(grid)
+  theme_bw(base_size=base_size, base_family=base_family) %+replace%
+    theme(axis.line=element_blank(),
+          axis.text=element_blank(),
+          axis.ticks=element_blank(),
+          axis.title=element_blank(),
+          panel.background=element_blank(),
+          panel.border=element_blank(),
+          panel.grid=element_blank(),
+          panel.spacing=unit(0, "lines"),
+          plot.background=element_blank(),
+          legend.justification = c(0, 0),
+          legend.position = c(0, 0)
+    )
+}
+
+
+statemap <- function(mapdf, mapvar, 
+                     cutpts, cutlabels, map_colors, 
+                     map_title, map_subtitle=NULL,
+                     legend_title){
+  mapdf <- mapdf %>%
+    rename(mapvalue=all_of(mapvar)) %>%
+    mutate(data_group=cut(mapvalue, cutpts, labels=cutlabels),
+           mapvarname=mapvar) %>%
+    select(stabbr, mapvarname, mapvalue, data_group)
+  
+  mdata <- left_join(
+    usmap::us_map() %>% 
+      arrange(full, piece, order), 
+      mapdf %>% rename(abbr=stabbr),
+      by="abbr")
+  
+  p <- mdata %>%
+    ggplot(aes(x = x, y = y)) +
+    geom_polygon(aes(fill=data_group, group = group),
+               color = "gray90", size = 0.1) +
+    # na.translate drops NA from the legend
+    scale_fill_manual(values=map_colors, drop=TRUE, na.translate=FALSE) + 
+    coord_equal() + 
+    guides(fill=guide_legend(title=legend_title)) +
+    ggtitle(map_title,
+            subtitle=map_subtitle) +
+    geom_text(data = bdata::statemap_labels %>%
+                filter(stabbr != "DC"), aes(x, y, label = stabbr), size = 3) +
+    theme_map() +
+    theme(legend.position = "right") +
+    theme(plot.title = element_text(size = 14, face = "bold"))
+  
+  #   labs(caption=capt) +
+  #   theme(plot.caption = element_text(hjust=0, size=8))
+  return(p)
+}
+
+```
+
+
+
+```{r prep_data, rows.print = 11, include=FALSE}
+# 0 = No AGI Stub
+# 1 = ‘Under $1’
+# 2 = '$1 under $10,000'
+# 3 = '$10,000 under $25,000'
+# 4 = '$25,000 under $50,000'
+# 5 = '$50,000 under $75,000'
+# 6 = '$75,000 under $100,000'
+# 7 = '$100,000 under $200,000'
+# 8 = ‘$200,000 under $500,000’
+# 9 = ‘$500,000 under $1,000,000’
+# 10 = ‘$1,000,000 or more’
+
+# A01000	Net capital gain (less loss) amount
+
+xlfile <- 'Boyd OSC analysis(5).xlsx'
+
+xwalk <- read_excel(here::here('ignore', xlfile),
+                    sheet='2018dictionary',
+                    skip=2)
+xwalk
+# ht(xwalk)
+
+stubs <- read_excel(here::here('ignore', xlfile), 
+                    sheet='agistubs',
+                    range='A3:B14') %>%
+              mutate(agi_stub=as.integer(agi_stub))
+stubs
+
+ht2 <- readRDS(here::here('data', 'soi', 'ht2.rds'))
+glimpse(ht2)
+ns(ht2)
+
+nyusdcoapr <- ht2 %>%
+  filter(stabbr %in% c("US", "NY", "PR", "DC", "OA"),
+         agi_stub==0, 
+         year %in% 2017:2018) %>%
+  select(year, stabbr, a06500)
+nyusdcoapr %>% write_csv("nyusdcoapr.csv")
+
+# tmp <- ht2 %>%
+#   filter(year >= 2017) %>%
+#   select(year, stabbr, agi_stub, n04450)
+
+# leave out PR, OA, keep DC but drop graphs, tables, recompute US!!!
+
+ht2a <- ht2  %>%
+  # filter(!stabbr %in% c("DC", "PR")) %>%  # PR showed up in 2018
+  filter(stabbr %in% c(state.abb, "DC")) %>%  # drop the U.S. as we will create our own
+  left_join(stubs,
+            by='agi_stub')
+count(ht2a, agi_stub, aginame)
+glimpse(ht2a)
+
+# A18425 State and local income taxes amount
+# n18425
+
+# now make a long file with labels
+ht2long_xus <- ht2a %>%
+  pivot_longer(cols = -c(year, stabbr, agi_stub, aginame), names_to="varname") %>%
+  left_join(xwalk %>% 
+              select(varname=variable, description) %>%
+              mutate(varname=str_to_lower(varname)),
+            by = "varname")
+
+# make the US file (with states and dc, but not pr or oa)
+ht2long_us <- ht2long_xus %>%
+  group_by(year, agi_stub, aginame, varname, description) %>%
+  summarise(value=sum(value, na.rm=TRUE), .groups="drop") %>%
+  mutate(stabbr="US")
+
+ht2long = bind_rows(ht2long_xus, ht2long_us)
+  
+
+n1 <- ht2long %>%
+  filter(varname=="n1") %>% 
+  select(year, stabbr, agi_stub, n1=value)
+
+h2n1 <- ht2long %>%
+  left_join(n1, by = c("year", "stabbr", "agi_stub")) %>%
+  mutate(avgvalue=ifelse(varname %in% c("n1", "mars1", "mars2"), 
+                         value / n1 * 100,
+                         value / n1 * 1000)) %>%
+  group_by(stabbr, agi_stub, varname) %>%
+  mutate(pch_value=value / value[match(year - 1, year)] * 100 - 100,
+         pch_avg=avgvalue / avgvalue[match(year - 1, year)] * 100 - 100) %>%
+  pivot_longer(cols=c(value, avgvalue, pch_value, pch_avg), names_to="measure") %>%
+  ungroup %>%
+  mutate(stname=factor(stabbr, 
+                       levels=c(state.abb, "DC", "US"), 
+                       labels=c(state.name, "District of Columbia", "United States")),
+         stname=as.character(stname)) %>%
+  select(year, stabbr, stname, everything())
+  
+# count(h2n1, stabbr, stname)
+
+
+# h2n1 %>% filter(stabbr=="CA", agi_stub==0, varname=="mars1")
+
+# examine an extreme outlier -- WI tax liability, stub 1, 2016
+check <- h2n1 %>% 
+  filter(stabbr=="WI", agi_stub==1, varname=="a06500", measure=="value") %>%
+  select(-measure) %>%
+  arrange(varname, agi_stub, year)
+# DT::datatable(check)
+# taxagi %>% filter((stabbr=="WI" & agi_stub==1)) # a10300 for WI in stub 1 in 2016 is an outlier
+
+taxagi <- h2n1 %>%
+  filter(varname %in% c("a00100", "a06500"),
+         measure=="value") %>%
+  select(year, stabbr, stname, agi_stub, aginame, varname, value) %>%
+  pivot_wider(names_from=varname) %>%
+  mutate(taxpct=a06500 / a00100 * 100)
+
+```
+
+
+
+<!--
+Throughout: To what extent are changes in NY similar to or different from other states?
+-->
+
+**Use the links above to navigate this document (Ctrl-home to return to the top to access the links).**
+
+
+# How much did federal income tax liability of New Yorkers change between 2017 and 2018?
+
+```{r taxliab, include=FALSE}
+# get dollar changes and percent changes
+taxliab <- taxagi %>%
+  filter(year >= 2016) %>%
+  select(year, stabbr, stname, agi_stub, aginame, a06500) %>%
+  mutate(year=paste0("TY", year),
+         a06500=a06500 / 1e3) %>%
+  pivot_wider(values_from = a06500, names_from=year) %>%
+  mutate(d2017_2016=TY2017 - TY2016,
+         d2018_2017=TY2018 - TY2017,
+         pd2017_2016 = d2017_2016 / TY2016 * 100,
+         pd2018_2017 = d2018_2017 / TY2017 * 100)
+#  taxliab
+# taxliab %>% filter(agi_stub==10) %>% arrange(-pd2018_2017)
+
+tabstab <- function(sts){
+  taxliab %>% 
+    filter(stabbr %in% sts) %>%
+  datatable(colnames = c('2017 minus 2016'='d2017_2016',
+                         '2018 minus 2017'='d2018_2017',
+                         '% change 2016 to 2017'='pd2017_2016',
+                         '% change 2017 to 2018'='pd2018_2017'),
+            filter='top',
+            options=list(pageLength = 11),
+            caption = htmltools::tags$caption(style = 'caption-side: top; text-align: left;',
+                                                'Federal income tax liability in $ millions,
+                                                2016-2018')) %>% 
+  formatRound(columns=5:11, digits=1)
+
+}
+
+nyliab <- taxliab %>% filter(stabbr=="NY")
+usliab <- taxliab %>% filter(stabbr=="US")
+
+```
+
+## Conclusions from this section
+
+Federal income tax liability for the US as a whole decreased more rapidly between 2017 and 2018 than it did for New Yorkers:
+
+*  **Income tax liability of New Yorkers declined `r scales::percent(abs(nyliab$pd2018_2017[nyliab$agi_stub==0] / 100), .1)` in 2018** after rising `r scales::percent(abs(nyliab$pd2017_2016[nyliab$agi_stub==0] / 100), .1)` in 2017. (New Yorkers' liability declined `r scales::dollar(abs(nyliab$d2018_2017[nyliab$agi_stub==0])/1e3, .1)` billion in 2018.)
+
+*  By contrast, **income tax liability in the nation declined `r scales::percent(abs(usliab$pd2018_2017[usliab$agi_stub==0] / 100), .1)` in 2018** after rising `r scales::percent(abs(usliab$pd2017_2016[usliab$agi_stub==0] / 100), .1)` in 2017. (The national liability decline in 2018 was `r scales::dollar(abs(usliab$d2018_2017[usliab$agi_stub==0])/1e3, .1)` billion.)
+
+
+This varied by income range:
+
+*  The larger national decline is most apparent in the income ranges from $25,000 through $1 million.
+
+*  Above $1 million, federal income tax for the nation as a whole and for New Yorkers actually increased despite the TCJA tax cuts. Liability increased more rapidly in the U.S. than it did for New Yorkers.
+
+*  Below $25,000, the federal income tax liability of New Yorkers fell more rapidly than it did for the US. 
+
+*  The income range below $1 is hard to interpret because it includes many people who by other measures would be high-income people but have managed to zero-out their adjusted gross income. Thus, it is not a good indicator of what happened to low-income taxpayers.
+
+The tables below provide details.
+
+Total tax liability can be affected by many factors including changes in the number of tax filers and changes in income sources, which may vary across states, so it is important to look at these factors.
+
+
+<!--
+`r scales::dollar(abs(nyliab$d2017_2016[nyliab$agi_stub==0])/1e3)` billion
+`r scales::dollar(abs(nyliab$d2018_2017[nyliab$agi_stub==0])/1e3)` billion
+`r scales::dollar(abs(usliab$d2017_2016[usliab$agi_stub==0])/1e3)` billion
+`r scales::dollar(abs(usliab$d2018_2017[usliab$agi_stub==0])/1e3)` billion
+-->
+
+
+## Percent changes in federal income tax liability from 2017 to 2018, US and NY compared
+
+The table below compares percent change in federal income tax liability between 2017 and 2018 for New York and the nation. The difference column gives the NY percent change minus the U.S. percent change. When it is positive, liability of New Yorkers increased more rapidly than liability in the nation (or decreased less rapidly, if it was a decrease). 
+
+In the lowest income ranges, liability of New Yorkers declined more rapidly than in the nation as a whole. Liability for millionaires in New York increased more rapidly than liability for millionaires in the nation as a whole.
+
+This table reflects both changes in numbers of taxpayers and in their average tax liability.
+
+```{r}
+
+data <- taxliab %>% 
+  filter(stabbr %in% c("NY", "US")) %>%
+  select(stabbr, agi_stub, aginame, value=pd2018_2017) %>%
+  pivot_wider(names_from = stabbr) %>%
+  select(agi_stub, aginame, US, NY) %>%
+  mutate(diff= NY - US)
+
+data %>%
+  gt() %>%
+  tab_header(
+    title = "Percent change in federal income tax liability, 2017 to 2018",
+    subtitle = NULL
+  ) %>%
+  cols_label(
+    diff = html("Difference:<br>New York<br>minus<br>United States")
+  ) %>%
+  fmt_percent(
+    columns = vars(US, NY, diff),
+    decimals = 1,
+    scale_values = FALSE
+  ) %>% 
+  tab_style(
+    style = list(
+      cell_fill(color = "#f7f7f7")
+    ),
+    locations = cells_body(
+      # columns = vars(V1, V2), # not needed if coloring all columns
+      rows = seq(1, nrow(data), 2))
+  )
+
+```
+
+
+```{r}
+# st <- "NY"
+tabshares <- function(st){
+  data <- taxliab %>% 
+    filter(stabbr == st) %>%
+    select(stname, agi_stub, aginame, TY2018, pd2018_2017, d2018_2017) %>%
+    mutate(pct2018=TY2018 / TY2018[agi_stub==0] * 100,
+           pctdshare=d2018_2017 / d2018_2017[agi_stub==0] * 100)
+  
+  data %>%
+  gt() %>%
+  tab_header(
+    title = "Change in federal income tax liability ($ millions), 2017 to 2018",
+    subtitle = NULL
+  ) %>%
+  cols_label(
+    TY2018="Liability\n2018",
+    pd2018_2017 = "% change\n2017 to 2018",
+    d2018_2017 = "$ change\n2017 to 2018",
+    pct2018="% share of\nliablity, 2018",
+    pctdshare="% share of liability change"
+  ) %>%
+  fmt_currency(
+    columns = starts_with(c("TY", "d")),
+    rows=1,
+    decimals = 0,
+    suffixing = FALSE
+  ) %>%
+  fmt_number(
+    columns = starts_with(c("TY", "d")),
+    rows=2:nrow(data),
+    decimals = 0,
+    suffixing = FALSE
+  ) %>%
+  fmt_number(
+    columns = starts_with(c("p")),
+    #rows=1,
+    decimals = 1,
+    pattern = " {x}%",
+    suffixing = FALSE
+  ) %>% 
+  # fmt_number(
+  #   columns = starts_with(c("pd")),
+  #   rows=2:nrow(data),
+  #   decimals = 1,
+  #   pattern = "{x}",
+  #   suffixing = FALSE
+  # ) %>% 
+  tab_style(
+    style = list(
+      cell_fill(color = "#f7f7f7")
+    ),
+    locations = cells_body(
+      # columns = vars(V1, V2), # not needed if coloring all columns
+      rows = seq(1, nrow(data), 2))
+  )
+}
+
+```
+
+
+
+```{r shares_ny, rows.print = 11, eval=FALSE}
+tabshares("NY")
+```
+
+
+```{r shares_us, rows.print = 11, eval=FALSE}
+tabshares("US")
+```
+
+
+```{r tabstab2}
+tabstab2 <- function(sts){
+  data <- taxliab %>% 
+    filter(stabbr %in% sts) %>%
+    select(-stabbr)
+  
+  data %>%
+  gt() %>%
+  tab_header(
+    title = "Federal income tax liability in $ millions, 2016-2018",
+    subtitle = NULL
+  ) %>%
+  tab_spanner(
+    label = "tax years",
+    columns = vars(TY2016, TY2017, TY2018)
+  ) %>%
+  tab_spanner(
+    label = "$ change",
+    columns = vars(d2017_2016, d2018_2017)
+  ) %>%
+  tab_spanner(
+    label = "% change",
+    columns = vars(pd2017_2016, pd2018_2017)
+  ) %>%
+  cols_label(
+    TY2016="2016",
+    TY2017="2017",
+    TY2018="2018",
+    d2017_2016 = "2016\nto 2017",
+    d2018_2017 = "2017\nto 2018",
+    pd2017_2016 = "2016\nto 2017",
+    pd2018_2017 = "2017\nto 2018"
+  ) %>%
+  fmt_currency(
+    columns = starts_with(c("TY", "d")),
+    rows=1,
+    decimals = 0,
+    suffixing = FALSE
+  ) %>%
+  fmt_number(
+    columns = starts_with(c("TY", "d")),
+    rows=2:nrow(data),
+    decimals = 0,
+    suffixing = FALSE
+  ) %>%
+  fmt_number(
+    columns = starts_with(c("pd")),
+    #rows=1,
+    decimals = 1,
+    pattern = " {x}%",
+    suffixing = FALSE
+  ) %>% 
+  # fmt_number(
+  #   columns = starts_with(c("pd")),
+  #   rows=2:nrow(data),
+  #   decimals = 1,
+  #   pattern = "{x}",
+  #   suffixing = FALSE
+  # ) %>% 
+  tab_style(
+    style = list(
+      cell_fill(color = "#f7f7f7")
+    ),
+    locations = cells_body(
+      # columns = vars(V1, V2), # not needed if coloring all columns
+      rows = seq(1, nrow(data), 2))
+  )
+}
+
+
+```
+
+
+## Dollar and percentage changes in federal income tax liability by income range
+
+The next two tables show the dollar change and percentage change in tax liability. The first shows NY and the second shows the US.
+
+In dollars, the greatest share of liability reductions went to New Yorkers with incomes between $25k and $500k. (That is, the amounts in the "$ change" column for 2017 to 2018 are largest in those income ranges.)
+
+
+
+**New York:**
+
+
+
+```{r ny_dpct, rows.print = 11}
+tabstab2("NY")
+```
+
+
+**The United States:**
+
+
+```{r us_dpct, rows.print = 11}
+tabstab2("US")
+
+```
+
+
+## Percentage change in total federal income tax liability from 2017 to 2018, all states ranked
+
+This table shows the percent change in total federal income tax liability from 2017 to 2018, sorted from largest percentage reduction to largest increase. New York is ranked #44 out of 51 (including DC).
+
+```{r rows.print = 52}
+taxliab %>%
+  filter(agi_stub==0) %>%
+  select(stabbr, stname, pd2018_2017) %>%
+  mutate(grp=stabbr=="US") %>%
+  group_by(grp) %>%
+  mutate(rank=rank(pd2018_2017),
+         rank=ifelse(stabbr=="US", NA_real_, rank)) %>%
+  ungroup %>%
+  select(-grp, -stabbr) %>%
+  arrange(pd2018_2017) %>%
+  gt() %>%
+  tab_header(
+    title = "Percent change in total federal income tax liability between 2017 and 2018"
+  ) %>%
+  cols_label(
+    pd2018_2017 = html("% change")
+  ) %>%
+  fmt_percent(
+    columns = starts_with(c("pd")),
+    scale_values = FALSE,
+    decimals = 1
+  ) %>%
+  fmt_number(
+    columns = "rank",
+    decimals = 0,
+    suffixing = FALSE
+  ) %>%
+  cols_align(align = c("left"), columns = "stname")
+
+
+```
+
+## ALL THE DATA (for reference): Changes in federal income tax liability for NY, the US, 50 states, and DC by income range
+
+This table is like the NY and US tables above, but will all states. It is filterable and sortable so that you can look at subsets. For example:
+
+1.  To see total 2018 liability sorted by size from large to small:
+   +  Click the box under agi_stub. A slider will appear. Move the right slider from 10 to 0, so that only agi_stub 0 (all income ranges -- i.e., the total) will be shown.
+   +  Click the arrows next to TY2018 to sort by tax-year 2018 values.
+2.  To see percent change in liability of millionaires from 2017 to 2018 for millionaires sorted:
+   +  Clear the boxes from the first exercise
+   +  Click in the agi_stub box and move the left slider from 0 to 10, so that only agi_stub 10 will be shown
+   +  Click the arrows next to the label "% change 2017 to 2018" to sort
+3.  To see just the data for California
+   +  Clear the boxes from the first exercise
+   +  Click in the stabbr (state abbreviation) box and type "CA"
+
+...and so on.
+
+```{r rows.print = 11}
+tabstab(c("US", state.abb, "DC"))
+
+```
+
+
+
+
+
+# Change attributable to changes in the size of the taxpaying population versus changes in income (e.g., wages, business income)
+
+
+```{r}
+
+decomp <- h2n1 %>%
+  filter(varname %in% c("a00100", "a06500"),
+         measure=="value") %>%
+  select(year, stabbr, stname, agi_stub, aginame, n1, varname, value) %>%
+  mutate(avg= value / n1 * 1000,
+         valuem=value / 1000) %>%
+  pivot_longer(c(n1, avg, value, valuem), names_to = "measure") %>%
+  group_by(stabbr, agi_stub, aginame, varname, measure) %>%
+  mutate(pch=value / value[match(year - 1, year)] * 100 - 100) %>%
+  ungroup
+
+ny <- decomp %>% filter(year==2018, stabbr=="NY", agi_stub==0, varname=="a06500")
+us <- decomp %>% filter(year==2018, stabbr=="NY", agi_stub==0, varname=="a06500")
+
+```
+
+## Conclusions from this section
+
+Total tax liability equals the number of taxpayers times their average tax, so it is useful to decompose changes in total liability into changes in the number of taxpayers and changes in their average tax.
+
+A rough rule of thumb is that the percent change in total tax is approximately the percent change in the number plus the percent change in the average. (If the percent changes are large a more-precise calculation is needed.)
+
+Across all taxpayers:
+
+*  NY total tax liability decreased `r abs(round(ny$pch[ny$measure=="value"], 1))`%, reflecting an increase of `r round(ny$pch[ny$measure=="n1"], 1)`% in the number of returns and a `r abs(round(ny$pch[ny$measure=="avg"], 1))`% reduction in the average tax.
+
+*  US total tax liability decreased `r abs(round(us$pch[us$measure=="value"], 1))`%, reflecting an increase of `r round(us$pch[us$measure=="n1"], 1)`% in the number of returns and a `r abs(round(us$pch[us$measure=="avg"], 1))`% reduction in the average tax.
+
+*  Thus the difference between New York and the nation was driven primarily by a larger national reduction in average tax, rather than by different growth rates in the number of taxpayers. New York had the 47th smallest reduction in average tax out of the 50 states plus DC.
+
+*  This varies by income range. In all income ranges of $50k or higher, average tax fell more in the nation than it did in New York. **This is a clue that the TCJA probably lowered taxes more in the rest of the nation than in New York. We'll take a closer look at this when we examine effective tax rates.**
+
+
+Tables below provide details by income range followed by states ranked by percentage change in average tax.
+
+
+## Percent changes in # of taxpayers, average tax, and total tax, NY and the US
+
+The following table has three sets of columns to the right of the income-group labels, each with 3 columns, as follows:
+
+* The first set of 3 columns gives the percent change from 2017 to 2018 for NY in:
+  + Number of taxpayers
+  + Average tax
+  + Total tax
+
+* The second set of 3 columns gives the same percent changes for the US
+
+* The third set of 3 columns gives the percent change for NY minus the percent change for the US
+
+
+For all taxpayers (agi_stub 0), the decline in NY tax liability was 2.4%, reflecting an increase in the number of taxpayers of 0.5% and a decline in average tax of 2.9%. The increase in the number of US taxpayers was similar, at 0.6%, but average US tax declined by 5.1%, considerably more than in NY.
+
+The 3 difference columns show that for incomes of $50k and higher, the change in average tax in NY was higher than in the US, and  usually considerably higher. That is, average tax declined less in NY than in the nation, except in the lowest income ranges.
+
+
+```{r rows.print = 11}
+
+data <- decomp %>%
+  select(-stname) %>%
+  filter(stabbr %in% c("NY", "US"),
+         measure != "value",
+         varname == "a06500",
+         year %in% 2018) %>%
+  select(-value, -year, -varname) %>%
+  unite("stmeas", stabbr, measure) %>%
+  pivot_wider(names_from = stmeas, values_from = pch) %>%
+  rename(NY_taxtot=NY_valuem,
+         US_taxtot=US_valuem) %>%
+  mutate(diff_n1=NY_n1 - US_n1,
+         diff_avg=NY_avg - US_avg,
+         diff_taxtot=NY_taxtot - US_taxtot) %>%
+  mutate(across(-c(agi_stub, aginame), ~ round(., 1)))
+
+data %>%
+  gt() %>%
+  tab_header(
+    title = "Decomposing % change in federal income tax liability between 2017 and 2018",
+    subtitle = "All numbers in table are % changes from 2017 to 2018"
+  ) %>%
+  tab_spanner(
+    label = "New York",
+    columns = vars(NY_n1, NY_avg, NY_taxtot)
+  ) %>%
+  tab_spanner(
+    label = "United States",
+    columns = vars(US_n1, US_avg, US_taxtot)
+  ) %>%
+  tab_spanner(
+    label = "New York minus United States",
+    columns = vars(diff_n1, diff_avg, diff_taxtot)
+  ) %>%
+  cols_label(
+    NY_n1="# of returns",
+    US_n1="# of returns",
+    diff_n1="# of returns",
+    NY_avg="average tax",
+    US_avg="average tax",
+    diff_avg="average tax",
+    NY_taxtot="total liability",
+    US_taxtot="total liability",
+    diff_taxtot="total liability"
+  )  %>% 
+  tab_style(
+    style = list(
+      cell_borders(sides = "left", color = "#000000", style = "solid", weight = px(1))
+    ),
+    locations =list(
+      cells_body(columns = c(6, 9)),
+      cells_column_labels(columns = c(6, 9)),
+      cells_column_spanners(spanners=c("United States",
+                                       "New York minus United States")))
+) %>% 
+  tab_style(
+    style = list(
+      cell_fill(color = "#f7f7f7")
+    ),
+    locations = cells_body(
+      rows = seq(1, nrow(data), 2))
+  )
+
+
+```
+
+## Percentage change in average federal income tax liability from 2017 to 2018, all states ranked
+
+This table shows the percent change in average federal income tax liability from 2017 to 2018, sorted from largest percentage reduction to largest increase. New York is ranked #47 out of 51 (including DC).
+
+```{r rows.print = 52}
+decomp %>%
+  filter(agi_stub==0, year==2018, varname=="a06500", measure=="avg") %>%
+  select(stabbr, stname, pch) %>%
+  mutate(grp=stabbr=="US") %>%
+  group_by(grp) %>%
+  mutate(rank=rank(pch),
+         rank=ifelse(stabbr=="US", NA_real_, rank)) %>%
+  ungroup %>%
+  select(-grp, -stabbr) %>%
+  arrange(pch) %>%
+  gt() %>%  tab_header(
+    title = "Percent change in average federal income tax liability between 2017 and 2018"
+  ) %>%
+  cols_label(
+    pch = html("% change")
+  ) %>%
+  fmt_percent(
+    columns="pch",
+    scale_values = FALSE,
+    decimals = 1
+  ) %>%
+  fmt_number(
+    columns = "rank",
+    decimals = 0,
+    suffixing = FALSE
+  ) %>%
+  cols_align(align = c("left"), columns = "stname")
+
+
+```
+
+# Relationship to changes in economy in NY vs. other states
+
+
+# Change attributable to actions by taxpayers in anticipation of TCJA
+
+
+# Change attributable to changes in the tax structure?
+
+## SALT
+
+## AMT
+
+
+## Rates
+
+
+
+
+# Appendix notes
+
+## Data
+
+The data in this report on federal income tax liability by state come from the IRS [Statistics of Income branch, Historical Table 2](https://www.irs.gov/statistics/soi-tax-stats-historic-table-2). The data I used cover tax years 2012 through 2018, but most of the analysis focuses primarily on changes between 2017 and 2018.
+
+
+## Definition of the United States
+For consistency with other work by the Office of the State Comptroller, I defined the United States as the 50 states plus the District of Columbia, which means I excluded from all totals Puerto Rico and what the IRS calls "Other Areas" (for example, returns filed from Army Post Office and Fleet Post Office addresses by members of the armed forces). Thus, the numbers repored for the United States in this report will be slightly smaller than numbers in the original IRS source documents. The excluded areas accounted for 0.4% of federal income tax liability in 2018.
+
+
+## Definition of tax liability
+The measure of income tax liability below is the same as that reported on line 13 of IRS Form 1040 for 2018, and referred to as "Income tax" in IRS spreadsheets for Historical Table 2. This is somewhat smaller than “Total tax liability” reported on line 15 of Form 1040. IRS documentation says the following about line 15:
+
+> [11] “Total tax liability” differs from “Income tax”, in that “Total tax liability” includes the taxes from recapture of certain prior-year credits, tax applicable to individual retirement arrangements (IRA's), social security taxes on self-employment income and on certain tip income, advanced earned income payments, household employment taxes, and certain other taxes listed in the Form 1040 instructions.
+
+
+## The effective tax rate measure
+
+Much of the analysis below relies on a measure of effective tax rates: federal income tax liability as a percentage of adjusted gross income. I examine changes in this measure over time, and differences across states and income ranges.
+
+It is not a perfect apples-to-apples comparison for several reasons:
+
+* There are many reasons for changes from one year to the next - people may have shifted income between years of have had economic changes that affected the measures. It is not the same as calculating 2017 tax law and 2018 tax law on the same exact data, which we can do in the second part of this project should we go forward.
+
+* The definition of AGI may have had some changes across years although I do not think that will have a big impact on results.
+
+* AGI is an imperfect measure of income or economic resources, but it's the only one we have available to us here.
+
+Within these limitations, it is a reasonable indicator of how federal income tax liability changed between 2017 and 2018. Ultimately, microdata that allow applying 2017 and 2018 law to a single set of data will provide improved measures of the impact of the new tax law.
+
+
+## Relationship of tax liability to tax receipts on a federal fiscal year basis
+
+Federal income tax liability reported on tax returns is related to, but not the same as, federal income tax receipts used to finance federal spending. Comparisons of liability totals to budgetary receipts will uncover differences for several reasons. For example:
+
+*  Tax liability is measured on a tax year basis, which for most taxpayers is a calendar year, while tax receipts are measured on a federal fiscal year basis, a year that ends in September. A substantial share of federal tax liability for a calendar year is paid in the following federal fiscal year, when tax returns are filed. For example, tax returns for the 2018 tax year were filed in April 2019, which fell in the 2018-19 federal fiscal year. Because New York's share of 2018 tax liability rose, its estimated share of federal fiscal year 2018-19 tax receipts also may rise under methodologies commonly used to estimate receipts by state.
+
+*  Federal income tax receipts include amounts that are not part of the tax liability definition used in this report, such as self-employment taxes.
+
+*  Tax receipts include amounts unrelated to current liability such as amounts paid on audit, amounts from prior tax years paid late, delinquency payments in response to letters from the IRS and so on.
+

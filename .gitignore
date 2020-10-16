@@ -5,10 +5,13 @@
 
 ignore/
 data/
-*.csv
-*.xls*
-*.rds
-*.html
-*.png
-*.xz
 tlcheck*/
+
+*.csv
+*.docx
+*.html
+*.pdf
+*.png
+*.rds
+*.xls*
+*.xz
